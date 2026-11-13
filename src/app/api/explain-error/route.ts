@@ -15,7 +15,7 @@ export async function POST(req: Request) {
     const lang = LANG_MAP[languageCode] || LANG_MAP["kn-IN"];
     const client = new SarvamAIClient({ apiSubscriptionKey: process.env.SARVAM_API_KEY! });
 
-    const chatRes = await client.chat.completions({
+    const chatRes: any = await client.chat.completions({
       model: "sarvam-105b",
       max_tokens: 4096,
       messages: [{
