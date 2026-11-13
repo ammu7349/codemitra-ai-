@@ -22,7 +22,7 @@ export async function POST(req: Request) {
         role: "user",
         content: `Code:\n${code}\n\nError:\n${error || "Review for bugs."}\n\n1. Explain the bug and fix in 2 simple sentences in ${lang.name}.\n2. Then write FIXED_CODE: followed by the complete corrected runnable code (no backticks).`,
       }],
-    });
+    } as any);
 
     const msg: any = chatRes.choices?.[0]?.message || {};
     const raw = (msg.content || msg.reasoning_content || "").trim();
@@ -40,10 +40,10 @@ export async function POST(req: Request) {
       try {
         const ttsRes = await client.textToSpeech.convert({
           text: explanation.slice(0, 500),
-          target_language_code: lang.code as any,
+          target_language_code: lang.code,
           model: "bulbul:v3",
           speaker: "shubh",
-        });
+        } as any);
         audioBase64 = ttsRes.audios?.[0] || null;
       } catch (e) { console.error("TTS:", e); }
     }
