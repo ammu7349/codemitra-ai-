@@ -51,6 +51,9 @@ export default function RoomPage() {
 
   const editorRef = useRef<any>(null);
   const codeRef = useRef<string>(SAMPLE_BUGS.indexError.code);
+  const providerRef = useRef<any>(null);
+  const lastAppliedTsRef = useRef<number>(0);
+  const isRemoteRef = useRef<boolean>(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
@@ -61,6 +64,19 @@ export default function RoomPage() {
     const u = new URLSearchParams(window.location.search).get("user");
     if (u) setUserName(u);
   }, []);
+
+  const broadcastCode = (newCode: string) => {
+    codeRef.current = newCode;
+    const provider = providerRef.current;
+    if (!provider) return;
+    const ts = Date.now();
+    lastAppliedTsRef.current = ts;
+    provider.awareness.setLocalStateField("codeSync", {
+      code: newCode,
+      ts,
+      clientId: provider.awareness.clientID,
+    });
+  };
 
   const handleEditorDidMount = async (editor: any) => {
     editorRef.current = editor;
@@ -73,55 +89,47 @@ export default function RoomPage() {
       const wsUrl = process.env.NEXT_PUBLIC_WS_URL || (isLocal ? "ws://localhost:1234" : "wss://codemitra-sync.onrender.com");
 
       const doc = new Y.Doc();
-      const provider = new WebsocketProvider(wsUrl, `codemitra-${activeRoom}`, doc);
-      const yText = doc.getText("monaco");
+      const provider = new WebsocketProvider(wsUrl, `codemitra-${activeRoom}`, doc, { connect: false });
+      providerRef.current = provider;
 
       provider.awareness.setLocalStateField("user", { name: u });
-      provider.awareness.on("change", () => {
-        setPeerCount(provider.awareness.getStates().size || 1);
-      });
 
-      let isRemoteUpdate = false;
-      yText.observe(() => {
-        const synced = yText.toString();
-        codeRef.current = synced;
-        if (editor.getValue() !== synced) {
-          isRemoteUpdate = true;
+      provider.awareness.on("change", () => {
+        const states = provider.awareness.getStates();
+        setPeerCount(states.size || 1);
+
+        let latestCode: string | null = null;
+        let latestTs = lastAppliedTsRef.current;
+        states.forEach((state: any, clientId: number) => {
+          if (clientId !== provider.awareness.clientID && state?.codeSync?.ts > latestTs) {
+            latestTs = state.codeSync.ts;
+            latestCode = state.codeSync.code;
+          }
+        });
+
+        if (latestCode !== null && editor.getValue() !== latestCode) {
+          lastAppliedTsRef.current = latestTs;
+          isRemoteRef.current = true;
           const pos = editor.getPosition();
-          editor.setValue(synced);
+          editor.setValue(latestCode);
+          codeRef.current = latestCode;
           if (pos) editor.setPosition(pos);
-          isRemoteUpdate = false;
+          isRemoteRef.current = false;
         }
       });
 
       editor.onDidChangeModelContent(() => {
         const current = editor.getValue();
         codeRef.current = current;
-        if (isRemoteUpdate) return;
-        if (yText.toString() !== current) {
-          doc.transact(() => {
-            yText.delete(0, yText.length);
-            yText.insert(0, current);
-          });
-        }
+        if (isRemoteRef.current) return;
+        broadcastCode(current);
       });
 
       provider.on("status", (event: any) => {
         setSyncStatus(event.status === "connected" ? "connected" : "connecting");
       });
 
-      provider.once("sync", (isSynced: boolean) => {
-        if (isSynced) {
-          if (yText.length === 0 && editor.getValue()) {
-            yText.insert(0, editor.getValue());
-          } else if (yText.length > 0 && editor.getValue() !== yText.toString()) {
-            isRemoteUpdate = true;
-            editor.setValue(yText.toString());
-            codeRef.current = yText.toString();
-            isRemoteUpdate = false;
-          }
-        }
-      });
+      provider.connect();
     } catch {
       setSyncStatus("connecting");
     }
@@ -130,6 +138,7 @@ export default function RoomPage() {
   const setEditorCode = (newCode: string) => {
     codeRef.current = newCode;
     if (editorRef.current) editorRef.current.setValue(newCode);
+    broadcastCode(newCode);
   };
 
   const handleLanguageChange = (newLang: string) => {
