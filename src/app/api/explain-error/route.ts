@@ -13,31 +13,19 @@ export async function POST(req: Request) {
   try {
     const { code, error, languageCode = "kn-IN" } = await req.json();
     const lang = LANG_MAP[languageCode] || LANG_MAP["kn-IN"];
-
-    const client = new SarvamAIClient({
-      apiSubscriptionKey: process.env.SARVAM_API_KEY!,
-    });
-
-    const prompt = `You are CodeMitra, a friendly coding mentor.
-Code:
-${code}
-
-Error:
-${error || "Review this code and fix any bug."}
-
-Reply in this exact format:
-EXPLANATION: <Write 2 simple sentences in ${lang.name} explaining the bug and fix>
-FIXED_CODE:
-<Write ONLY the complete corrected code here, no markdown backticks>`;
+    const client = new SarvamAIClient({ apiSubscriptionKey: process.env.SARVAM_API_KEY! });
 
     const chatRes = await client.chat.completions({
       model: "sarvam-105b",
-      reasoning_effort: "low",
-      max_tokens: 1024,
-      messages: [{ role: "user", content: prompt }],
-    } as any);
+      max_tokens: 4096,
+      messages: [{
+        role: "user",
+        content: `Code:\n${code}\n\nError:\n${error || "Review for bugs."}\n\n1. Explain the bug and fix in 2 simple sentences in ${lang.name}.\n2. Then write FIXED_CODE: followed by the complete corrected runnable code (no backticks).`,
+      }],
+    });
 
-    const raw = chatRes.choices?.[0]?.message?.content || "";
+    const msg: any = chatRes.choices?.[0]?.message || {};
+    const raw = (msg.content || msg.reasoning_content || "").trim();
     let explanation = raw;
     let fixedCode = "";
 
@@ -57,20 +45,15 @@ FIXED_CODE:
           speaker: "shubh",
         });
         audioBase64 = ttsRes.audios?.[0] || null;
-      } catch (ttsErr) {
-        console.error("TTS warning:", ttsErr);
-      }
+      } catch (e) { console.error("TTS:", e); }
     }
 
     return NextResponse.json({
-      explanation: explanation || "No explanation returned.",
+      explanation: explanation || "Could not generate explanation.",
       fixedCode,
       audioBase64,
     });
   } catch (err: any) {
-    return NextResponse.json(
-      { error: err.message || "Sarvam AI request failed" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: err.message || "Sarvam AI failed" }, { status: 500 });
   }
 }
