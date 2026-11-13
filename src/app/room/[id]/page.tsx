@@ -5,7 +5,7 @@ import Link from "next/link";
 import Editor from "@monaco-editor/react";
 import {
   Play, Mic, Square, Sparkles, Volume2,
-  CheckCircle2, Share2, Bug, Code2, Loader2,
+  CheckCircle2, Share2, Bug, Code2, Loader2, Users,
 } from "lucide-react";
 
 const SAMPLE_BUGS = {
@@ -31,9 +31,9 @@ export default function RoomPage() {
   const [userName, setUserName] = useState("Developer");
   const [progLang, setProgLang] = useState("python");
   const [indicLang, setIndicLang] = useState("kn-IN");
-  const [code, setCode] = useState(SAMPLE_BUGS.indexError.code);
   const [stdinInput, setStdinInput] = useState("5 10");
   const [syncStatus, setSyncStatus] = useState<"connecting" | "connected">("connecting");
+  const [peerCount, setPeerCount] = useState(1);
 
   const [output, setOutput] = useState("");
   const [errorOutput, setErrorOutput] = useState("");
@@ -50,6 +50,7 @@ export default function RoomPage() {
   const [copied, setCopied] = useState(false);
 
   const editorRef = useRef<any>(null);
+  const codeRef = useRef<string>(SAMPLE_BUGS.indexError.code);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
@@ -67,6 +68,7 @@ export default function RoomPage() {
       const Y = await import("yjs");
       const { WebsocketProvider } = await import("y-websocket");
       const activeRoom = window.location.pathname.split("/").filter(Boolean)[1] || "reva-hack-1";
+      const u = new URLSearchParams(window.location.search).get("user") || "Developer";
       const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
       const wsUrl = process.env.NEXT_PUBLIC_WS_URL || (isLocal ? "ws://localhost:1234" : "wss://codemitra-sync.onrender.com");
 
@@ -74,19 +76,28 @@ export default function RoomPage() {
       const provider = new WebsocketProvider(wsUrl, `codemitra-${activeRoom}`, doc);
       const yText = doc.getText("monaco");
 
+      provider.awareness.setLocalStateField("user", { name: u });
+      provider.awareness.on("change", () => {
+        setPeerCount(provider.awareness.getStates().size || 1);
+      });
+
       let isRemoteUpdate = false;
       yText.observe(() => {
         const synced = yText.toString();
+        codeRef.current = synced;
         if (editor.getValue() !== synced) {
           isRemoteUpdate = true;
+          const pos = editor.getPosition();
           editor.setValue(synced);
+          if (pos) editor.setPosition(pos);
           isRemoteUpdate = false;
         }
       });
 
       editor.onDidChangeModelContent(() => {
-        if (isRemoteUpdate) return;
         const current = editor.getValue();
+        codeRef.current = current;
+        if (isRemoteUpdate) return;
         if (yText.toString() !== current) {
           doc.transact(() => {
             yText.delete(0, yText.length);
@@ -96,13 +107,19 @@ export default function RoomPage() {
       });
 
       provider.on("status", (event: any) => {
-        if (event.status === "connected") {
-          setSyncStatus("connected");
-          if (yText.toString() === "" && editor.getValue()) {
+        setSyncStatus(event.status === "connected" ? "connected" : "connecting");
+      });
+
+      provider.once("sync", (isSynced: boolean) => {
+        if (isSynced) {
+          if (yText.length === 0 && editor.getValue()) {
             yText.insert(0, editor.getValue());
+          } else if (yText.length > 0 && editor.getValue() !== yText.toString()) {
+            isRemoteUpdate = true;
+            editor.setValue(yText.toString());
+            codeRef.current = yText.toString();
+            isRemoteUpdate = false;
           }
-        } else {
-          setSyncStatus("connecting");
         }
       });
     } catch {
@@ -111,7 +128,7 @@ export default function RoomPage() {
   };
 
   const setEditorCode = (newCode: string) => {
-    setCode(newCode);
+    codeRef.current = newCode;
     if (editorRef.current) editorRef.current.setValue(newCode);
   };
 
@@ -127,10 +144,11 @@ export default function RoomPage() {
     setOutput("");
     setErrorOutput("");
     try {
+      const currentCode = editorRef.current ? editorRef.current.getValue() : codeRef.current;
       const res = await fetch("/api/run-code", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code, language: progLang, stdin: stdinInput + "\n" }),
+        body: JSON.stringify({ code: currentCode, language: progLang, stdin: stdinInput + "\n" }),
       });
       const data = await res.json();
       setOutput(data.output || "");
@@ -155,10 +173,11 @@ export default function RoomPage() {
     setFixedCode("");
     setAudioBase64(null);
     try {
+      const currentCode = editorRef.current ? editorRef.current.getValue() : codeRef.current;
       const res = await fetch("/api/explain-error", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code, error: errorOutput, languageCode: indicLang }),
+        body: JSON.stringify({ code: currentCode, error: errorOutput, languageCode: indicLang }),
       });
       const data = await res.json();
       if (data.explanation) {
@@ -230,7 +249,7 @@ export default function RoomPage() {
   return (
     <div className="h-screen bg-[#0d1117] text-slate-100 flex flex-col overflow-hidden">
       <header className="border-b border-slate-800 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 bg-[#161b22]">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
           <Link href="/" className="flex items-center gap-2 font-bold text-white">
             <Code2 className="w-5 h-5 text-sky-400" />
             <span>CodeMitra AI</span>
@@ -238,7 +257,10 @@ export default function RoomPage() {
           <span className="text-xs px-2.5 py-1 rounded-md bg-slate-800 text-slate-300 border border-slate-700">Room: #{roomId}</span>
           <span className="text-xs px-2.5 py-1 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">● {userName}</span>
           <span className={`text-xs px-2.5 py-1 rounded-md border ${syncStatus === "connected" ? "bg-sky-500/15 text-sky-300 border-sky-500/30" : "bg-amber-500/15 text-amber-300 border-amber-500/30"}`}>
-            {syncStatus === "connected" ? "● Live Synced" : "● Connecting Sync..."}
+            {syncStatus === "connected" ? "● Live Synced" : "● Connecting..."}
+          </span>
+          <span className="text-xs px-2.5 py-1 rounded-md bg-purple-500/15 text-purple-300 border border-purple-500/30 flex items-center gap-1">
+            <Users className="w-3.5 h-3.5" /> {peerCount} in room
           </span>
         </div>
 
@@ -273,8 +295,7 @@ export default function RoomPage() {
               height="100%"
               language={progLang}
               theme="vs-dark"
-              value={code}
-              onChange={(val) => setCode(val || "")}
+              defaultValue={SAMPLE_BUGS.indexError.code}
               onMount={handleEditorDidMount}
               options={{ fontSize: 14, minimap: { enabled: false }, padding: { top: 12 } }}
             />
